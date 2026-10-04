@@ -86,7 +86,7 @@ async function sendMetaCapi(payload, req) {
     return;
   }
 
-  const { service, event_id, attribution = {} } = payload;
+  const { service, event_id, budget_tier, attribution = {} } = payload;
 
   const eventName = service === 'shopify'
     ? 'ShopifyLead'
@@ -120,7 +120,7 @@ async function sendMetaCapi(payload, req) {
         user_data:        userData,
         custom_data: {
           content_name: service || payload.form || 'unknown',
-          value:        25000,
+          ...(CAPI_VALUE_MAP[budget_tier] !== undefined && { value: CAPI_VALUE_MAP[budget_tier] }),
           currency:     'INR',
         },
       },
@@ -128,7 +128,7 @@ async function sendMetaCapi(payload, req) {
   };
 
   const url =
-    'https://graph.facebook.com/v19.0/' +
+    'https://graph.facebook.com/v26.0/' +
     pixelId +
     '/events?access_token=' +
     capiToken;
@@ -188,6 +188,18 @@ const BUDGET_MAP = {
   '50k-1l': '50K - 1L',
   '1l-3l': '1L - 3L',
   '3l-5l': '3L - 5L',
+};
+
+/**
+ * Server-side CAPI value lookup keyed by budget_tier (INR).
+ * Never trusts the browser-supplied lead_value; only these known tiers are accepted.
+ * If budget_tier is absent or unrecognised, value is omitted from custom_data entirely.
+ */
+const CAPI_VALUE_MAP = {
+  '25k-50k':  25000,
+  '50k-1l':   50000,
+  '1l-3l':   100000,
+  '3l-5l':   300000,
 };
 
 /**
