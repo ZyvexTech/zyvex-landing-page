@@ -5,11 +5,11 @@
    case studies) so a Meta click is remembered even if the visitor
    browses around or comes back later before submitting the form.
 
-   Storage (localStorage, first-party, 90-day retention):
-     zx_ft   first touch   — written once, never overwritten while valid
-     zx_lt   latest touch  — replaced when a different attribution set arrives
-     zx_fbc  latest Meta click {fbc, fbclid, ts} — fbc built from the time the
-             fbclid was FIRST captured, or Meta's own _fbc for that click
+   Storage (localStorage, first-party):
+     zx_ft   first touch   — written once; permanent retention (never expires while valid)
+     zx_lt   latest touch  — 90-day retention; replaced when a different attribution set arrives
+     zx_fbc  latest Meta click {fbc, fbclid, ts} — 90-day retention; fbc built from the time
+             the fbclid was FIRST captured, or Meta's own _fbc for that click
 
    Nothing is fabricated: no fbclid/fbc/fbp is produced unless it came from
    the URL or Meta's own cookies. Every storage/cookie access is guarded, so
@@ -20,7 +20,7 @@
 (function (w) {
   'use strict';
 
-  var RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
+  var RETENTION_MS = 90 * 24 * 60 * 60 * 1000;         // latest-touch & fbc retention: 90 days
   var UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id'];
   var SET_KEYS = UTM_KEYS.concat(['fbclid', 'gclid']);
 
@@ -33,7 +33,10 @@
   function validClickId(v) { return typeof v === 'string' && RE_CLICK_ID.test(v); }
   function fbcTime(v) { return Number(v.split('.')[2]); }
   function fbcClickId(v) { return v.split('.').slice(3).join('.'); }
+  // latest touch / stored click: 90-day retention
   function fresh(rec) { return !!rec && typeof rec.ts === 'number' && Date.now() - rec.ts < RETENTION_MS; }
+  // first touch: permanent retention — valid structure never expires (no 90-day limit)
+  function validFt(rec) { return !!rec && typeof rec.ts === 'number'; }
   // valid format AND embedded click time no older than 90 days
   function usableFbc(v) { return validFbc(v) && Date.now() - fbcTime(v) < RETENTION_MS; }
 
@@ -55,7 +58,8 @@
   }
   function cookie(name) {
     try {
-      var m = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
+      var doc = w.document || document;
+      var m = doc.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
       return m ? decodeURIComponent(m[1]) : '';
     } catch (e) { return ''; }
   }
@@ -100,8 +104,8 @@
     var lt = load('zx_lt');
     if (!(fresh(lt) && sameSet(lt, touch))) save('zx_lt', touch);
 
-    // first touch: write once; never overwrite a valid one
-    if (!fresh(load('zx_ft'))) save('zx_ft', touch);
+    // first touch: write once; permanent retention (never expires while valid)
+    if (!validFt(load('zx_ft'))) save('zx_ft', touch);
 
     // Meta click → fbc stamped with the time this fbclid was first captured
     if (current.fbclid) {
@@ -122,41 +126,41 @@
   /* ── merged view for the lead form ── */
   w.zxAttribution = function () {
     try {
-      var ft = load('zx_ft'), lt = load('zx_lt'), sf = load('zx_fbc');
-      if (!fresh(ft)) ft = null;
+      var ft = load('zx_ft'), lt = load('zx_lt');
+      if (!validFt(ft)) ft = null;
       if (!fresh(lt)) lt = null;
-      if (!fresh(sf)) sf = null;
 
-      // UTM / gclid as one set: this page's URL if it has any, else latest touch
-      var set = Object.keys(current).length ? current : (lt || {});
       var out = {};
-      UTM_KEYS.concat(['gclid']).forEach(function (k) { if (set[k]) out[k] = set[k]; });
 
-      var fbc = '';
-      var metaFbc = cookie('_fbc');
-      if (currentFbc && usableFbc(currentFbc.fbc)) {
-        // a valid fbclid in this page's URL is authoritative: Meta's _fbc is used only
-        // when it is the same click; a different cookie or stored click is ignored
-        fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === currentFbc.fbclid) ? metaFbc : currentFbc.fbc;
-      } else {
-        // no click in this URL: most recent usable click among Meta's _fbc cookie and the
-        // stored click (each well-formed and no older than 90 days by its embedded timestamp)
-        var cands = [];
-        if (usableFbc(metaFbc)) cands.push(metaFbc);           // listed first: wins ties
-        if (sf && usableFbc(sf.fbc)) cands.push(sf.fbc);
-        cands.forEach(function (c) { if (!fbc || fbcTime(c) > fbcTime(fbc)) fbc = c; });
+      // 1. Current UTM parameters (only when present in current visit)
+      UTM_KEYS.forEach(function (k) {
+        if (current[k]) out[k] = current[k];
+      });
+
+      // 2. Current Google Click (only when gclid is present in current visit)
+      if (current.gclid) {
+        out.gclid = current.gclid;
       }
-      if (fbc) out.fbc = fbc;
 
-      // fbclid always matches the chosen fbc, so the two never describe different clicks
-      var fbclid = fbc ? fbcClickId(fbc) : (current.fbclid || '');
-      if (validClickId(fbclid)) out.fbclid = fbclid;
+      // 3. Current Meta Click (only when fbclid is genuinely present on current visit)
+      // Never blindly attach an old/stale fbc to an unrelated direct or Google visit.
+      if (current.fbclid && currentFbc && usableFbc(currentFbc.fbc)) {
+        var metaFbc = cookie('_fbc');
+        var fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === current.fbclid)
+          ? metaFbc
+          : currentFbc.fbc;
+        out.fbc = fbc;
+        out.fbclid = current.fbclid;
+      }
 
+      // 4. Browser identifier (_fbp cookie continues normally)
       var fbp = cookie('_fbp');
       if (validFbp(fbp)) out.fbp = fbp;
 
+      // 5. Preserved multi-touch history
       if (ft) out.first_touch = ft;
       if (lt) out.latest_touch = lt;
+
       return out;
     } catch (e) {
       return {};

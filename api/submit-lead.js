@@ -68,6 +68,8 @@ function normaliseAttribution(raw) {
     fbclid:       fbclid,
     fbc:          fbc,
     fbp:          typeof a.fbp === 'string' && RE_FBP.test(a.fbp) ? a.fbp : '',
+    ...(a.first_touch && typeof a.first_touch === 'object' && { first_touch: a.first_touch }),
+    ...(a.latest_touch && typeof a.latest_touch === 'object' && { latest_touch: a.latest_touch }),
   };
 }
 
