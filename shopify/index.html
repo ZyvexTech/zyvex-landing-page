@@ -1224,12 +1224,18 @@ var fbpMatch = document.cookie.match(/(?:^|;\s*)_fbp=([^;]+)/);
 var za = {};
 try { za = (window.zxAttribution && window.zxAttribution()) || {}; } catch (zaErr) { za = {}; }
 var attribution = {
-utm_source:   sp.get('utm_source')   || za.utm_source   || '',
-utm_medium:   sp.get('utm_medium')   || za.utm_medium   || '',
-utm_campaign: sp.get('utm_campaign') || za.utm_campaign || '',
-fbclid:       za.fbclid          || sp.get('fbclid') || '',   /* same click as fbc first; URL as fallback */
-fbp:          (fbpMatch ? decodeURIComponent(fbpMatch[1]) : '') || za.fbp || '',
-fbc:          za.fbc || ''
+utm_source:    sp.get('utm_source')    || za.utm_source    || '',
+utm_medium:    sp.get('utm_medium')    || za.utm_medium    || '',
+utm_campaign:  sp.get('utm_campaign')  || za.utm_campaign  || '',
+utm_content:   sp.get('utm_content')   || za.utm_content   || '',
+utm_term:      sp.get('utm_term')      || za.utm_term      || '',
+utm_id:        sp.get('utm_id')        || za.utm_id        || '',
+gclid:         za.gclid               || sp.get('gclid')  || '',  /* never fabricated */
+fbclid:        za.fbclid              || sp.get('fbclid') || '',  /* same click as fbc first; URL as fallback */
+fbp:           (fbpMatch ? decodeURIComponent(fbpMatch[1]) : '') || za.fbp || '',
+fbc:           za.fbc || '',
+first_touch:   za.first_touch  || undefined,
+latest_touch:  za.latest_touch || undefined
 };
 var payload = {
 form: kind,

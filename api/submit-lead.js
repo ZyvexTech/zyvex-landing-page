@@ -55,10 +55,16 @@ function normaliseAttribution(raw) {
     browserFbc ? browserFbc
     : fbclid ? `fb.1.${Date.now()}.${fbclid}`
     : '';
+  // gclid: same format as fbclid but only kept when genuinely present; never fabricated.
+  const gclid = typeof a.gclid === 'string' && RE_CLICK_ID.test(a.gclid) ? a.gclid : '';
   return {
     utm_source:   cleanText(a.utm_source),
     utm_medium:   cleanText(a.utm_medium),
     utm_campaign: cleanText(a.utm_campaign),
+    utm_content:  cleanText(a.utm_content),
+    utm_term:     cleanText(a.utm_term),
+    utm_id:       cleanText(a.utm_id),
+    gclid:        gclid,
     fbclid:       fbclid,
     fbc:          fbc,
     fbp:          typeof a.fbp === 'string' && RE_FBP.test(a.fbp) ? a.fbp : '',
