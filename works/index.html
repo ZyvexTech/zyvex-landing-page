@@ -399,9 +399,8 @@ scrollbar-width:none;margin:0 -16px;padding:4px 16px 18px;scroll-padding:0 16px}
 .tcard{flex:0 0 86%;scroll-snap-align:start;padding:20px 18px 16px;box-shadow:none}
 .tcard:hover{transform:none;box-shadow:none}
 .tcard-head{font-size:16px}
-.tcards-dots{display:flex;justify-content:center;gap:7px;margin-top:4px}
-.tcards-dots button{width:8px;height:8px;border-radius:50%;border:0;padding:0;background:var(--line);cursor:pointer}
-.tcards-dots button.on{width:22px;border-radius:4px;background:var(--teal2)}
+.tcards-dots{display:block;position:relative;width:120px;height:3px;margin:6px auto 0;border-radius:3px;background:var(--line);overflow:hidden}
+.tcards-dots i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--teal2);will-change:transform}
 }
 @media(prefers-reduced-motion:reduce){.tcard-more{transition:none}}
 </style>
@@ -629,11 +628,9 @@ In their words, not ours.
 (function(){var w=document.querySelector('.tcards');if(!w)return;
 w.querySelectorAll('.tcard-toggle').forEach(function(b){b.addEventListener('click',function(){var c=b.closest('.tcard'),o=c.classList.toggle('open');
  b.setAttribute('aria-expanded',o);b.textContent=o?'Show less':'Read full review'})});
-var t=w.querySelector('.tcards-track'),cards=t.querySelectorAll('.tcard'),d=w.querySelector('.tcards-dots'),dots=[];
-cards.forEach(function(c,i){var x=document.createElement('button');x.type='button';x.setAttribute('aria-label','Review '+(i+1));
- x.addEventListener('click',function(){t.scrollTo({left:c.offsetLeft-t.offsetLeft-16})});d.appendChild(x);dots.push(x)});
-function upd(){var i=0,best=1e9;cards.forEach(function(c,k){var dist=Math.abs(c.getBoundingClientRect().left-t.getBoundingClientRect().left-16);if(dist<best){best=dist;i=k}});
- dots.forEach(function(x,k){x.classList.toggle('on',k===i)})}
+var t=w.querySelector('.tcards-track'),d=w.querySelector('.tcards-dots'),bar=document.createElement('i');d.appendChild(bar);
+function upd(){var vis=t.clientWidth/t.scrollWidth,max=t.scrollWidth-t.clientWidth,p=max>0?t.scrollLeft/max:0;
+ bar.style.width=(vis*100)+'%';bar.style.transform='translateX('+(p*(1/vis-1)*100)+'%)'}
 t.addEventListener('scroll',upd,{passive:true});window.addEventListener('resize',upd);upd()})();
 </script>
 <section class="section section-b">
