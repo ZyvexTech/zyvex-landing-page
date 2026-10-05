@@ -32,6 +32,9 @@ var LEAD_VALUES = {
   "retainer:50k-1l": 30000,
   "retainer:1l-3l": 40000,
   "retainer:3l-plus": 40000,
+  "retainer:1l-5l": 40000,
+  "retainer:5l-20l": 40000,
+  "retainer:20l-plus": 40000,
   /* one-time Shopify build, keyed by stated budget */
   "shopify:under-15k": 0,
   "shopify:15k-30k": 20000,
