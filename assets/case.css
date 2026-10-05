@@ -32,3 +32,5 @@ font-size:18px;line-height:1;cursor:pointer}
 .brands.logos img{display:block;max-width:100%;max-height:100px;width:auto;height:auto;object-fit:contain}
 .brands.logos .wide img{max-width:88%;max-height:56px}
 @media(max-width:640px){.brands.logos{grid-template-columns:1fr 1fr}.brands.logos span{min-height:120px}.brands.logos img{max-height:80px}}
+/* Keep screenshots at their natural aspect ratio when width/height attributes are set. */
+.wshots img,.wcover{height:auto}
