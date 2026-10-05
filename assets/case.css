@@ -34,3 +34,6 @@ font-size:18px;line-height:1;cursor:pointer}
 @media(max-width:640px){.brands.logos{grid-template-columns:1fr 1fr}.brands.logos span{min-height:120px}.brands.logos img{max-height:80px}}
 /* Keep screenshots at their natural aspect ratio when width/height attributes are set. */
 .wshots img,.wcover{height:auto}
+/* Case study heroes size to their content on phones instead of filling the screen,
+   so there is no empty band between the site link and the cover image. */
+@media(max-width:768px){body .hero{min-height:0;padding-top:48px;padding-bottom:48px}body .hero::before,body .hero::after{content:none}}
