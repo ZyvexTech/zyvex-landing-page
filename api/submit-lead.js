@@ -30,6 +30,9 @@ const RE_CLICK_ID = /^[\w-]{10,500}$/;
 const RE_FBC      = /^fb\.[0-2]\.\d{13}\.[\w-]{10,500}$/;
 const RE_FBP      = /^fb\.[0-2]\.\d{13}\.\d{5,30}$/;
 
+/** An active Meta journey lasts 1 hour from the click (same limit as attribution.js). */
+const META_JOURNEY_MAX_MS = 60 * 60 * 1000;
+
 function cleanText(v) {
   if (typeof v !== 'string') return '';
   return v.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200);
@@ -47,7 +50,16 @@ function cleanText(v) {
 function normaliseAttribution(raw) {
   const a = raw && typeof raw === 'object' ? raw : {};
   let fbclid = typeof a.fbclid === 'string' && RE_CLICK_ID.test(a.fbclid) ? a.fbclid : '';
-  const browserFbc = typeof a.fbc === 'string' && RE_FBC.test(a.fbc) ? a.fbc : '';
+  let browserFbc = typeof a.fbc === 'string' && RE_FBC.test(a.fbc) ? a.fbc : '';
+  // Active Meta journey: the browser's explicit signal (zx_mj), under 1 hour old, with a
+  // valid click identifier. Without it fbc/fbclid are not current attribution, so they are
+  // dropped here (never repaired or rebuilt) and reach neither Meta CAPI nor Zoho.
+  const mj = a.meta_journey && typeof a.meta_journey === 'object' ? a.meta_journey : null;
+  const metaJourney = !!mj && mj.source === 'meta' &&
+    typeof mj.age_ms === 'number' && isFinite(mj.age_ms) &&
+    mj.age_ms >= 0 && mj.age_ms < META_JOURNEY_MAX_MS &&
+    !!(fbclid || browserFbc);
+  if (!metaJourney) { fbclid = ''; browserFbc = ''; }
   // Consistency: never send an fbclid and fbc that describe different clicks.
   // The selected fbc wins; a mismatched fbclid is discarded (the lead is not blocked).
   if (browserFbc && fbclid && browserFbc.split('.').slice(3).join('.') !== fbclid) fbclid = '';
@@ -67,10 +79,25 @@ function normaliseAttribution(raw) {
     gclid:        gclid,
     fbclid:       fbclid,
     fbc:          fbc,
+    meta_journey: metaJourney,
     fbp:          typeof a.fbp === 'string' && RE_FBP.test(a.fbp) ? a.fbp : '',
     ...(a.first_touch && typeof a.first_touch === 'object' && { first_touch: a.first_touch }),
     ...(a.latest_touch && typeof a.latest_touch === 'object' && { latest_touch: a.latest_touch }),
   };
+}
+
+/* --- Zoho Lead_Source ------------------------------------------------------- */
+
+/**
+ * Lead_Source (Zoho picklist display value) for a website lead. Exactly two outcomes:
+ *   "Meta Ads"  an active Meta journey (zx_mj) is present
+ *   "Direct"    anything else
+ * The journey is the only authority. An fbc / fbclid on its own, however valid or recent,
+ * never makes a lead "Meta Ads", and neither do UTMs, gclid or the first_touch /
+ * latest_touch history. Takes the output of normaliseAttribution(). Pure.
+ */
+function getLeadSource(attribution) {
+  return attribution && attribution.meta_journey === true ? 'Meta Ads' : 'Direct';
 }
 
 /* --- Meta CAPI -------------------------------------------------------------- */
@@ -296,7 +323,7 @@ async function createZohoLead(payload, req) {
     Mobile:      normalisePhone(phone) || phone || undefined,
     Company:     business  || undefined,
     Website:     website   || undefined,
-    Lead_Source: 'Meta Ads',
+    Lead_Source: getLeadSource(attribution),
     Lead_Status: 'Not Contacted',
     Lead_Type:   LEAD_TYPE_MAP[service] || undefined,
     Budget:

@@ -8,15 +8,20 @@
    Storage (localStorage, first-party):
      zx_ft   first touch   — written once; permanent retention (never expires while valid)
      zx_lt   latest touch  — 90-day retention; replaced when a different attribution set arrives
-     zx_fbc  latest Meta click {fbc, fbclid, ts} — 90-day retention; fbc built from the time
-             the fbclid was FIRST captured, or Meta's own _fbc for that click
+     zx_mj   CURRENT META JOURNEY {v, src:"meta", ts, fbc, fbclid, u} — the only source of the
+             fbc/fbclid the form sends. Started by a Meta click (fbclid in the URL, or a valid
+             zx_mc carrier), it survives reloads and navigation between our own pages and
+             tabs, and ends after 1 hour or at the next entry that is not a Meta click
+             (typed URL, bookmark, external link, search). ft/lt are history only; they never
+             decide whether a visitor is on a Meta journey.
 
    Cross-browser carrier (URL parameter, 1-hour lifetime):
      zx_mc   compact Base64URL payload carrying Meta click attribution from an in-app
              browser (WebView A) to an external browser (Browser B). Maintained in the
              address bar of an in-app browser across internal page exploration within 1
-             hour of the click. Consumed once by the receiving external browser, then
-             immediately stripped from the address bar. Never propagated further.
+             hour of the click. Consumed once by the receiving external browser, which
+             starts its own Meta journey from it, then immediately stripped from the
+             address bar. Never propagated further.
 
    Nothing is fabricated: no fbclid/fbc/fbp is produced unless it came from
    the URL, a valid unexpired zx_mc carrier, or Meta's own cookies. Every
@@ -30,6 +35,9 @@
 
   var RETENTION_MS        = 90 * 24 * 60 * 60 * 1000; // latest-touch & fbc retention: 90 days
   var CARRIER_RETENTION_MS = 60 * 60 * 1000;           // zx_mc carrier lifetime: 1 hour
+  var JOURNEY_MS          = CARRIER_RETENTION_MS;      // Meta journey: 1 hour from the click, never extended
+  var CLOCK_SKEW_MS       = 5 * 60 * 1000;             // tolerated clock drift on a stored timestamp
+  var JOURNEY_KEY         = 'zx_mj';
 
   var UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id'];
   var SET_KEYS = UTM_KEYS.concat(['fbclid', 'gclid']);
@@ -50,7 +58,7 @@
   // valid format AND embedded click time no older than 90 days
   function usableFbc(v)    { return validFbc(v) && Date.now() - fbcTime(v) < RETENTION_MS; }
 
-  // Carrier eligibility: stored zx_fbc record must be valid and strictly < 1 hour old.
+  // Carrier eligibility: the zx_mj journey record must be valid and strictly < 1 hour old.
   // Absolute 1-hour rule: both stored capture time AND embedded click time must be < 1 hour.
   function carrierFresh(rec) {
     if (!rec || typeof rec !== 'object') return false;
@@ -84,6 +92,45 @@
       var m = doc.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]+)'));
       return m ? decodeURIComponent(m[1]) : '';
     } catch (e) { return ''; }
+  }
+
+  function remove(key) {
+    try { w.localStorage.removeItem(key); } catch (e) { /* storage unavailable */ }
+  }
+
+  /* ── Meta journey ── */
+  // Valid = Meta-sourced, not ended, consistent click id / fbc, and started less than 1 hour ago.
+  function validJourney(j) {
+    if (!j || typeof j !== 'object' || j.src !== 'meta' || j.ended) return false;
+    if (!validClickId(j.fbclid) || !usableFbc(j.fbc) || fbcClickId(j.fbc) !== j.fbclid) return false;
+    if (typeof j.ts !== 'number') return false;
+    var age = Date.now() - j.ts;
+    return age > -CLOCK_SKEW_MS && age < JOURNEY_MS;
+  }
+
+  // How this page was reached: 'navigate' | 'reload' | 'back_forward'.
+  function navType() {
+    try {
+      var e = w.performance.getEntriesByType('navigation')[0];
+      if (e && e.type) return e.type;
+    } catch (err) { /* fall through */ }
+    try {
+      var t = w.performance.navigation.type;
+      return t === 1 ? 'reload' : t === 2 ? 'back_forward' : 'navigate';
+    } catch (err) { return 'navigate'; }
+  }
+  function internalReferrer() {
+    try {
+      var r = (w.document || document).referrer;
+      return !!r && new URL(r).origin === w.location.origin;
+    } catch (e) { return false; }
+  }
+  // A fresh arrival from outside the site (typed URL, bookmark, external link, search).
+  // Reloads, back/forward and clicks between our own pages are the same journey.
+  function isNewEntry() {
+    var t = navType();
+    if (t === 'reload' || t === 'back_forward') return false;
+    return !internalReferrer();
   }
 
   /* ── read this page's URL ── */
@@ -213,7 +260,7 @@
   /* ── capture on landing ── */
   var inApp           = isInAppBrowser();
   var current         = readUrl();          // this page's URL attribution (UTM/fbclid/gclid)
-  var currentFbc      = null;               // {fbc, fbclid, ts} for the click active in this page
+  var urlFbclid       = current.fbclid || ''; // a Meta click in THIS address bar (before any carrier merge)
   var rawCarrier      = null;
   try { rawCarrier = new URLSearchParams(w.location.search).get('zx_mc'); } catch (e) {}
 
@@ -227,10 +274,8 @@
 
   // Handle valid zx_mc in the URL
   if (carrierPayload) {
-    var carriedFbclid = carrierPayload.c;
-    var carriedFbc    = 'fb.1.' + carrierPayload.ot + '.' + carriedFbclid;
     if (!current.fbclid) {
-      current.fbclid = carriedFbclid;
+      current.fbclid = carrierPayload.c;
     }
     // Restore campaign UTMs from carrier if not already in URL
     if (carrierPayload.u) {
@@ -242,9 +287,6 @@
       if (!current.utm_term     && umap.tr) current.utm_term     = cleanText(umap.tr);
       if (!current.utm_id       && umap.i)  current.utm_id       = cleanText(umap.i);
     }
-    currentFbc = { fbc: carriedFbc, fbclid: carriedFbclid, ts: carrierPayload.ot };
-    save('zx_fbc', currentFbc);
-
     if (!inApp) {
       // Browser B (external Chrome/Safari breakout):
       // Consume carrier, persist attribution, and immediately strip zx_mc from URL.
@@ -253,6 +295,49 @@
     }
     // In Browser A (inApp === true), keep existing valid zx_mc in the URL without stripping
   }
+
+  /* ── Meta journey: start, keep, or end ── */
+  // One record (zx_mj) answers "did this visitor come from a Meta ad?":
+  //   Meta click on this page (URL fbclid, or a valid carrier) → start / keep the journey
+  //   no click, but reload / back / click from our own page    → keep the journey
+  //   no click, fresh arrival from outside the site            → end it (stale protection)
+  // Nothing is fabricated: fbc comes from the click id, never from IP, user agent or timing.
+  var journey = null;
+  remove('zx_fbc');                          // retired store, superseded by zx_mj
+  (function establishJourney() {
+    var now = Date.now();
+    var raw = load(JOURNEY_KEY);               // last journey record, active or not
+    var stored = validJourney(raw) ? raw : null;
+
+    var click = urlFbclid
+      ? { fbclid: urlFbclid, ts: now, fbc: '' }
+      : (carrierPayload
+          ? { fbclid: carrierPayload.c, ts: carrierPayload.ot, fbc: 'fb.1.' + carrierPayload.ot + '.' + carrierPayload.c }
+          : null);
+
+    if (click) {
+      if (stored && stored.fbclid === click.fbclid) { journey = stored; return; } // same click seen again: keep original
+      // A click starts at most one journey: once it has expired or ended, reloading or
+      // reopening that old ad URL does not start another. Only a different Meta click does.
+      if (raw && raw.fbclid === click.fbclid) return;
+      var fbc = click.fbc;
+      if (!fbc) {
+        var metaFbc = cookie('_fbc');
+        fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === click.fbclid)
+          ? metaFbc                                            // Meta already created one for this click
+          : 'fb.1.' + now + '.' + click.fbclid;                // first capture time, not submit time
+      }
+      var u = {};
+      UTM_KEYS.forEach(function (k) { if (current[k]) u[k] = current[k]; });
+      var rec = { v: 1, src: 'meta', ts: click.ts, fbc: fbc, fbclid: click.fbclid, u: u };
+      if (validJourney(rec)) { journey = rec; save(JOURNEY_KEY, rec); return; }
+    }
+
+    if (stored && !isNewEntry()) { journey = stored; return; }
+    // New entry from outside the site: the journey is over. The record is kept (marked
+    // ended) rather than deleted, so history stays and the old click cannot be restarted.
+    if (stored) save(JOURNEY_KEY, Object.assign({}, stored, { ended: true }));
+  })();
 
   (function capture() {
     if (!Object.keys(current).length) return;
@@ -270,25 +355,6 @@
 
     // first touch: write once; permanent retention (never expires while valid)
     if (!validFt(load('zx_ft'))) save('zx_ft', touch);
-
-    // Meta click → fbc stamped with the time this fbclid was first captured.
-    // If a carrier pre-set currentFbc (Browser B), skip re-derivation to preserve
-    // the original click timestamp embedded in the carrier.
-    if (current.fbclid && !currentFbc) {
-      var stored = load('zx_fbc');
-      if (fresh(stored) && stored.fbclid === current.fbclid && usableFbc(stored.fbc)) {
-        currentFbc = stored;                                   // same click seen again: keep original
-      } else {
-        var metaFbc = cookie('_fbc');
-        var fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === current.fbclid)
-          ? metaFbc                                            // Meta already created one for this click
-          : 'fb.1.' + now + '.' + current.fbclid;              // first capture time, not submit time
-        var u = {};
-        UTM_KEYS.forEach(function (k) { if (current[k]) u[k] = current[k]; });
-        currentFbc = { fbc: fbc, fbclid: current.fbclid, ts: now, u: u };
-        save('zx_fbc', currentFbc);
-      }
-    }
   })();
 
   /* ── zx_mc maintenance (Browser A — in-app browser only) ── */
@@ -303,8 +369,8 @@
     // If current URL already contains a valid zx_mc, preserve it (do not regenerate or refresh ts)
     if (carrierPayload) return;
 
-    // Check if an active, fresh Meta click exists in zx_fbc (< 1 hour old)
-    var stored = currentFbc || load('zx_fbc');
+    // Needs an active Meta journey whose click is < 1 hour old
+    var stored = journey;
     if (!carrierFresh(stored)) return;     // no click, or click >= 1 hour old: do NOT generate
 
     // Build carrier using the ORIGINAL click/capture timestamp (never Date.now())
@@ -315,6 +381,13 @@
     if (encoded) writeCarrier(encoded);
   })();
 
+  // The journey to report right now: re-checked on every call so an expired one is never sent.
+  function activeJourney() {
+    var s = load(JOURNEY_KEY);
+    if (validJourney(s)) return s;
+    return validJourney(journey) ? journey : null;   // in-memory copy when storage is blocked
+  }
+
   /* ── merged view for the lead form ── */
   w.zxAttribution = function () {
     try {
@@ -322,11 +395,13 @@
       if (!validFt(ft)) ft = null;
       if (!fresh(lt)) lt = null;
 
+      var j = activeJourney();
       var out = {};
 
-      // 1. Current UTM parameters (only when present in current visit or recovered carrier)
+      // 1. UTM parameters: this page's, else the ones the Meta journey arrived with
       UTM_KEYS.forEach(function (k) {
-        if (current[k]) out[k] = current[k];
+        var v = current[k] || (j && j.u && cleanText(j.u[k]));
+        if (v) out[k] = v;
       });
 
       // 2. Current Google Click (only when gclid is present in current visit)
@@ -334,24 +409,22 @@
         out.gclid = current.gclid;
       }
 
-      // 3. Current Meta Click — only when:
-      //    (a) a genuine fbclid exists in current URL, OR
-      //    (b) a valid unexpired zx_mc carrier was consumed this session.
-      //    Never blindly attach an old/stale fbc to an unrelated direct or Google visit.
-      if (current.fbclid && currentFbc && usableFbc(currentFbc.fbc)) {
+      // 3. Meta click: only while a Meta journey is active. A visitor with no active
+      //    journey (direct, bookmark, search, other referral) never gets an fbc/fbclid.
+      if (j) {
         var metaFbc = cookie('_fbc');
-        var fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === current.fbclid)
-          ? metaFbc
-          : currentFbc.fbc;
-        out.fbc    = fbc;
-        out.fbclid = current.fbclid;
+        out.fbc    = (usableFbc(metaFbc) && fbcClickId(metaFbc) === j.fbclid) ? metaFbc : j.fbc;
+        out.fbclid = j.fbclid;
+        // The explicit "this conversion is on an active Meta journey" signal the server
+        // uses for the CRM source. Age, not a timestamp, so client clock drift is harmless.
+        out.meta_journey = { source: 'meta', age_ms: Math.max(0, Date.now() - j.ts) };
       }
 
       // 4. Browser identifier (_fbp cookie — Browser B uses its own, not carried)
       var fbp = cookie('_fbp');
       if (validFbp(fbp)) out.fbp = fbp;
 
-      // 5. Preserved multi-touch history
+      // 5. Preserved multi-touch history (never used to decide the CRM source)
       if (ft) out.first_touch = ft;
       if (lt) out.latest_touch = lt;
 

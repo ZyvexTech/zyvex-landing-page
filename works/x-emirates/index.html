@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script defer src="/assets/attribution.js?v=6"></script>
+<script defer src="/assets/attribution.js?v=7"></script>
 <title>X Emirates Online | Zyvex Tech</title>
 <meta name="description" content="A skincare brand moved from WhatsApp orders to a Shopify store, reaching &#8377;76 lakhs in revenue, 8.32x ROAS and a 9% conversion rate.">
 <link rel="canonical" href="https://in.zyvextech.co/works/x-emirates/">
@@ -671,6 +671,9 @@ if(bad) return;
 var tier = form.elements.budget.value;
 var tierLabel = form.elements.budget.selectedOptions[0].textContent.trim();
 var value = leadValue(kind, tier);
+/* Meta journey / UTM attribution (assets/attribution.js); {} if unavailable */
+var za = {};
+try { za = (window.zxAttribution && window.zxAttribution()) || {}; } catch (zaErr) { za = {}; }
 var payload = {
 form: kind,
 name: form.elements.name.value.trim(),
@@ -684,6 +687,7 @@ message: form.elements.message ? form.elements.message.value.trim() : '',
 lead_value: value,
 qualified: value > 0,
 event_id: uid(),
+attribution: za,
 source: 'in.zyvextech.co',
 page: window.location.pathname,
 submitted_at: new Date().toISOString()
