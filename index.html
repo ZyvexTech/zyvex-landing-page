@@ -292,7 +292,7 @@ background:rgba(244,242,236,.015);overflow:hidden}
 .founder-video video:not([src]){display:none}
 .video-empty img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .founder-video{border-radius:18px}
-.team{display:grid;grid-template-columns:repeat(4,1fr);gap:20px;margin-top:48px}
+.team{display:grid;grid-template-columns:repeat(5,1fr);gap:20px;margin-top:48px}
 .team-card{border:1px solid var(--line);border-radius:18px;overflow:hidden;
 background:rgba(244,242,236,.015);display:flex;flex-direction:column;transition:transform .18s,border-color .18s}
 .team-card:hover{transform:translateY(-3px);border-color:rgba(244,242,236,.28)}
@@ -303,8 +303,10 @@ background:rgba(244,242,236,.015);display:flex;flex-direction:column;transition:
 .team-name{font-family:'Runalto',Georgia,serif;font-size:22px;line-height:1.1}
 .team-role{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--teal2);
 font-weight:600;margin-top:9px;line-height:1.5}
-@media(max-width:900px){.team{grid-template-columns:1fr 1fr}}
-@media(max-width:480px){.team{gap:12px}.team-body{padding:14px}.team-name{font-size:18px}.team-role{font-size:10.5px}}
+@media(max-width:1100px){.team{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:900px){.team{grid-template-columns:1fr 1fr}
+.team-card:last-child:nth-child(odd){grid-column:1/-1;justify-self:center;width:calc(50% - 10px)}}
+@media(max-width:480px){.team{gap:12px}.team-card:last-child:nth-child(odd){width:calc(50% - 6px)}.team-body{padding:14px}.team-name{font-size:18px}.team-role{font-size:10.5px}}
 @media(prefers-reduced-motion:reduce){.team-card,.team-img img{transition:none}}
 .video-empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
 justify-content:center;gap:18px;color:var(--faint);font-size:12.5px;line-height:1.5;
@@ -828,8 +830,8 @@ The people who build, run and report on your store. No junior bench, no hand-off
 </div>
 <div class="team">
 <div class="team-card">
-<div class="team-img"><img src="/assets/team/falah-ahmed.jpg" alt="Falah Ahmed, Shopify Expert / Full Stack Developer" width="720" height="900" loading="lazy" decoding="async"></div>
-<div class="team-body"><h3 class="team-name">Falah Ahmed</h3><p class="team-role">Shopify Expert / Full Stack Developer</p></div>
+<div class="team-img"><img src="/assets/team/falah-ahmed.jpg" alt="Falah Ahmed, Shopify Expert / Performance Marketing Expert" width="720" height="900" loading="lazy" decoding="async"></div>
+<div class="team-body"><h3 class="team-name">Falah Ahmed</h3><p class="team-role">Shopify Expert / Performance Marketing Expert</p></div>
 </div>
 <div class="team-card">
 <div class="team-img"><img src="/assets/team/abin-tomy.jpg" alt="Abin Tomy, Full Stack Developer" width="720" height="900" loading="lazy" decoding="async"></div>
@@ -842,6 +844,10 @@ The people who build, run and report on your store. No junior bench, no hand-off
 <div class="team-card">
 <div class="team-img"><img src="/assets/team/rishan-ahammed.jpg" alt="Rishan Ahammed, UI/UX Designer / Content Creator" width="720" height="900" loading="lazy" decoding="async"></div>
 <div class="team-body"><h3 class="team-name">Rishan Ahammed</h3><p class="team-role">UI/UX Designer / Content Creator</p></div>
+</div>
+<div class="team-card">
+<div class="team-img"><img src="/assets/team/zayd-abdulla.jpg" alt="Zayd Abdulla, Conversion Tracking &amp; Shopify Expert" width="720" height="900" loading="lazy" decoding="async"></div>
+<div class="team-body"><h3 class="team-name">Zayd Abdulla</h3><p class="team-role">Conversion Tracking &amp; Shopify Expert</p></div>
 </div>
 </div>
 </div>
