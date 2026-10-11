@@ -149,7 +149,7 @@ async function sendMetaCapi(payload, req) {
         user_data:        userData,
         custom_data: {
           content_name: service || payload.form || 'unknown',
-          ...(CAPI_VALUE_MAP[budget_tier] !== undefined && { value: CAPI_VALUE_MAP[budget_tier] }),
+          ...(lookup(CAPI_VALUE_MAP, budget_tier) !== undefined && { value: lookup(CAPI_VALUE_MAP, budget_tier) }),
           currency:     'INR',
         },
       },
@@ -238,6 +238,16 @@ const CAPI_VALUE_MAP = {
 };
 
 /**
+ * Own-property lookup by string key. Non-string keys, unknown keys and inherited
+ * names such as "__proto__" or "constructor" all return undefined.
+ */
+function lookup(map, key) {
+  return typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key)
+    ? map[key]
+    : undefined;
+}
+
+/**
  * Create a Lead record in Zoho CRM (Leads module).
  * Required env vars: ZOHO_REFRESH_TOKEN, ZOHO_CLIENT_ID, ZOHO_CLIENT_SECRET.
  */
@@ -253,7 +263,7 @@ async function createZohoLead(payload, req) {
 
   const {
     name, email, phone, business, website,
-    budget, budget_tier, budget_label, message, service,
+    budget, budget_tier, message, service,
     timeline,
     attribution = {},
   } = payload;
@@ -316,6 +326,16 @@ async function createZohoLead(payload, req) {
     return undefined;
   }
 
+  // Budget is a Zoho picklist: only a known mapped value is sent. An unknown budget
+  // leaves the field empty (never free text or an object); the lead still goes through.
+  const zohoBudget = lookup(BUDGET_MAP, budget_tier) || lookup(BUDGET_MAP, budget);
+  if (!zohoBudget && (budget_tier || budget)) {
+    const raw = typeof budget_tier === 'string' && budget_tier ? budget_tier
+      : typeof budget === 'string' ? budget
+      : typeof (budget_tier || budget);
+    console.warn('[Zoho] Unmapped budget, Budget left empty:', JSON.stringify(cleanText(raw).slice(0, 40)));
+  }
+
   const record = {
     Last_Name:   lastName,
     First_Name:  firstName || undefined,
@@ -326,13 +346,7 @@ async function createZohoLead(payload, req) {
     Lead_Source: getLeadSource(attribution),
     Lead_Status: 'Not Contacted',
     Lead_Type:   LEAD_TYPE_MAP[service] || undefined,
-    Budget:
-      BUDGET_MAP[budget_tier] ||
-      BUDGET_MAP[budget] ||
-      BUDGET_MAP[budget_label] ||
-      budget ||
-      budget_label ||
-      undefined,
+    Budget:      zohoBudget,
     Meta_FBP:    fitZoho(attribution.fbp, 'Meta_FBP'),
     Meta_FBCLID: wholeOrNone(fbclid, 'Meta_FBCLID'),
     Meta_FBC:    wholeOrNone(fbc, 'Meta_FBC'),
