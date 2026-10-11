@@ -91,7 +91,10 @@ global.fetch = async function (url, opts) {
     return respond(r.status, r.json);
   }
   if (u.host === 'www.zohoapis.in') {
-    const p = u.pathname.replace('/crm/v2', '');
+    // COQL must use v8 (v2 rejects Converted_Deal); every other call stays on v2.
+    const isCoql = u.pathname === '/crm/v8/coql';
+    if (!isCoql) assert.ok(u.pathname.startsWith('/crm/v2/'), 'unexpected Zoho path ' + u.pathname);
+    const p = isCoql ? '/coql' : u.pathname.replace('/crm/v2', '');
     if (p === '/Deals/' + DEAL_ID && opts.method === 'GET') {
       return state.deal ? respond(200, { data: [JSON.parse(JSON.stringify(state.deal))] }) : respond(204);
     }
@@ -368,6 +371,19 @@ test('Zoho server error stops before Meta', async () => {
   const r = await call();
   assert.equal(r.status, 503);
   assert.equal(metaCalls().length, 0);
+});
+
+test('converted-Lead COQL goes to v8; Deal, Contact and tag calls stay on v2', async () => {
+  reset();
+  const r = await call();
+  assert.equal(r.status, 200);
+  const zohoCalls = calls.filter((c) => c.url.startsWith('https://www.zohoapis.in/'));
+  const coql = zohoCalls.filter((c) => c.url.endsWith('/coql'));
+  assert.deepEqual(coql.map((c) => c.url), ['https://www.zohoapis.in/crm/v8/coql']);
+  assert.match(coql[0].body.select_query, /where Converted__s = true and Converted_Deal = \d+ limit 2$/);
+  for (const c of zohoCalls.filter((c) => !c.url.endsWith('/coql'))) {
+    assert.ok(c.url.startsWith('https://www.zohoapis.in/crm/v2/'), c.url);
+  }
 });
 
 test('a COQL INVALID_QUERY logs the rejected column name', async () => {

@@ -29,6 +29,8 @@ const crypto = require('crypto');
 /* --- configuration ---------------------------------------------------------- */
 
 const ZOHO_API     = 'https://www.zohoapis.in/crm/v2';
+// v2 COQL rejects the Lead conversion lookups (Converted_Deal); newer versions accept them.
+const ZOHO_COQL_API = 'https://www.zohoapis.in/crm/v8';
 const ZOHO_ACCOUNTS = 'https://accounts.zoho.in/oauth/v2/token';
 const META_API     = 'https://graph.facebook.com/v26.0';
 
@@ -150,10 +152,10 @@ async function getZohoAccessToken() {
  * Call the Zoho API. Returns parsed JSON, or null for 204 (no record / no rows).
  * Scope and auth problems stop the run before anything is sent to Meta.
  */
-async function zoho(token, method, path, body) {
+async function zoho(token, method, path, body, base) {
   let res;
   try {
-    res = await timedFetch(ZOHO_API + path, {
+    res = await timedFetch((base || ZOHO_API) + path, {
       method: method,
       headers: Object.assign(
         { Authorization: 'Zoho-oauthtoken ' + token },
@@ -212,7 +214,7 @@ async function findConvertedLead(token, dealId) {
       'select id, Lead_Type, Lead_Source, Email, Mobile, Phone, Meta_FBC, Meta_FBP, ' +
       'Client_IP, User_Agent from Leads ' +
       'where Converted__s = true and Converted_Deal = ' + dealId + ' limit 2',
-  });
+  }, ZOHO_COQL_API);
   const rows = json && Array.isArray(json.data) ? json.data : [];
   if (rows.length > 1) throw new StopError('ambiguous_lead', 200);
   return rows[0] || null;
