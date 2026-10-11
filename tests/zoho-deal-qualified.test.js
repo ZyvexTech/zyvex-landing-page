@@ -371,6 +371,22 @@ test('Zoho server error stops before Meta', async () => {
   assert.equal(metaCalls().length, 0);
 });
 
+test('a COQL INVALID_QUERY logs the rejected column name', async () => {
+  reset({ coqlError: { status: 400, json: { code: 'INVALID_QUERY', status: 'error',
+    message: 'column given seems to be invalid', details: { column_name: 'Converted_Deal' } } } });
+  logs = [];
+  const r = await call();
+  assert.equal(r.status, 503);
+  assert.equal(r.body.reason, 'zoho_error_400');
+  assert.equal(metaCalls().length, 0);
+  const line = logs.find((l) => l.startsWith('[deal-qualified] Zoho API error'));
+  assert.ok(line);
+  const logged = JSON.parse(line.slice('[deal-qualified] Zoho API error '.length));
+  assert.equal(logged.path, '/coql');
+  assert.equal(logged.code, 'INVALID_QUERY');
+  assert.equal(logged.column, 'Converted_Deal');
+});
+
 test('if the pending marker cannot be written, nothing is sent to Meta', async () => {
   reset({ tagFails: { 'add_tags:meta-qualified-pending': true } });
   const r = await call();

@@ -27,7 +27,8 @@ global.fetch = async function (url, opts) {
   requests.push({ url, body: JSON.parse(opts.body) });
   return { ok: true, json: async () => ({ data: [{ status: 'success' }] }), text: async () => '' };
 };
-console.info = function () {};
+let infos = [];
+console.info = function () { infos.push(Array.from(arguments).join(' ')); };
 console.warn = function () { warnings.push(Array.from(arguments).join(' ')); };
 
 async function submit(form, fields) {
@@ -152,4 +153,28 @@ test('Lead_Type, Lead_Source and Lead_Status are unchanged', async () => {
   assert.equal(a.zoho.Lead_Status, 'Not Contacted');
   const b = await submit('shopify', { budget_tier: '1l-3l' });
   assert.equal(b.zoho.Lead_Type, 'Shopify Builds');
+});
+
+test('each submission logs its event_id and event name, without personal data', async () => {
+  for (const [form, eventName] of [['retainer', 'FullStackLead'], ['shopify', 'ShopifyLead']]) {
+    infos = [];
+    const r = await submit(form, { event_id: 'zx-mabc123-k9x2p1q' });
+    assert.equal(r.meta.event_id, 'zx-mabc123-k9x2p1q');
+    const line = infos.find((l) => l.startsWith('[submit-lead] Submitted:'));
+    assert.ok(line);
+    assert.deepEqual(JSON.parse(line.slice('[submit-lead] Submitted: '.length)),
+      { event: eventName, event_id: 'zx-mabc123-k9x2p1q' });
+    const all = infos.join('\n');
+    for (const pii of ['Test Person', 'test@example.com', '9999999999', 'Test Co', 'test-token']) {
+      assert.ok(!all.includes(pii), pii);
+    }
+  }
+});
+
+test('a malformed event_id is logged as null, never echoed', async () => {
+  infos = [];
+  await submit('retainer', { event_id: 'someone@example.com' });
+  const line = infos.find((l) => l.startsWith('[submit-lead] Submitted:'));
+  assert.ok(line.includes('"event_id":null'));
+  assert.ok(!infos.join('\n').includes('someone@example.com'));
 });
