@@ -177,7 +177,8 @@ async function zoho(token, method, path, body) {
     method: method,
     status: res.status,
     code: code || null,
-    message: json && json.message ? json.message : null
+    message: json && json.message ? json.message : null,
+    column: json && json.details ? json.details.column_name : null
   }));
   throw new StopError('zoho_error_' + res.status, 503);
 }

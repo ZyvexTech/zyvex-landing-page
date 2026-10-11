@@ -435,5 +435,13 @@ module.exports = async function handler(req, res) {
     }
   });
 
+  // Trace line: the browser-generated event_id shared by Pixel and CAPI (no personal data)
+  const eventId = typeof body.event_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(body.event_id)
+    ? body.event_id : null;
+  console.info('[submit-lead] Submitted:', JSON.stringify({
+    event:    enrichedPayload.service === 'shopify' ? 'ShopifyLead' : 'FullStackLead',
+    event_id: eventId,
+  }));
+
   return res.status(200).json({ ok: true });
 };
