@@ -210,7 +210,7 @@ async function findConvertedLead(token, dealId) {
   const json = await zoho(token, 'POST', '/coql', {
     select_query:
       'select id, Lead_Type, Lead_Source, Email, Mobile, Phone, Meta_FBC, Meta_FBP, ' +
-      'Client_IP, User_Agent, Converted_Contact from Leads ' +
+      'Client_IP, User_Agent from Leads ' +
       'where Converted__s = true and Converted_Deal = ' + dealId + ' limit 2',
   });
   const rows = json && Array.isArray(json.data) ? json.data : [];
