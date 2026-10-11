@@ -57,7 +57,6 @@ function reset(overrides) {
       Lead_Source: 'Direct',
       Email: 'old@example.com', Mobile: '+919999999999',
       Meta_FBC: FBC, Meta_FBP: FBP, Client_IP: IP, User_Agent: UA,
-      Converted_Contact: { id: CONTACT_ID },
     }, o.lead),
     extraLead: !!o.extraLead,
     contact: o.contact === null ? null : Object.assign({ id: CONTACT_ID, Email: EMAIL, Mobile: PHONE }, o.contact),
