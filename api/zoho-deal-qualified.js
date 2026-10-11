@@ -172,6 +172,13 @@ async function zoho(token, method, path, body) {
   if (code === 'OAUTH_SCOPE_MISMATCH' || code === 'NO_PERMISSION') throw new StopError('zoho_scope_missing', 503);
   if (res.status === 401) throw new StopError('zoho_auth_failed', 503);
   if (code === 'INVALID_DATA' || res.status === 404) return null;    // record does not exist
+  console.error('[deal-qualified] Zoho API error', JSON.stringify({
+    path: path,
+    method: method,
+    status: res.status,
+    code: code || null,
+    message: json && json.message ? json.message : null
+  }));
   throw new StopError('zoho_error_' + res.status, 503);
 }
 
