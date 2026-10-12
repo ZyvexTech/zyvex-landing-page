@@ -12,6 +12,12 @@
 //                           nothing is sent (proves the marker works on every run)
 //   meta-qualified-sent     written only after Meta confirms events_received: 1;
 //                           a Deal carrying it is never sent again
+// A Deal that already carries meta-qualified-pending is also skipped (200 duplicate,
+// pending_marker_present): an earlier run may have reached Meta (e.g. sent_unmarked,
+// or a crash after the call). Pending is removed after a confirmed Meta failure, so
+// those retries still send. To resend a Deal stuck in pending, remove the tag in Zoho.
+// Limitation: two deliveries that both read the Deal before either writes pending can
+// both send; the shared event_id lets Meta deduplicate them (48 h window).
 //
 // Logs carry only: Deal ID, event name, result, HTTP status, events_received,
 // fbtrace_id and a skip/failure reason. Never tokens, bodies or personal data.
@@ -305,6 +311,7 @@ async function processDeal(dealId) {
   // Duplicate prevention depends on reading the Deal's tags; without them, send nothing.
   if (!Array.isArray(deal.Tag)) return { status: 503, result: 'failed', reason: 'tag_field_missing' };
   if (hasTag(deal, TAG_SENT)) return { status: 200, result: 'duplicate', reason: 'already_sent' };
+  if (hasTag(deal, TAG_PENDING)) return { status: 200, result: 'duplicate', reason: 'pending_marker_present' };
 
   const contactId = deal.Contact_Name && deal.Contact_Name.id;
   const [lead, contactJson] = await Promise.all([
