@@ -18,6 +18,9 @@
 // those retries still send. To resend a Deal stuck in pending, remove the tag in Zoho.
 // Limitation: two deliveries that both read the Deal before either writes pending can
 // both send; the shared event_id lets Meta deduplicate them (48 h window).
+// Stuck-pending signals (console.warn): pending_cleanup_failed when the tag could not be
+// removed after a Meta failure, and pending_marker_present when a delivery is skipped.
+// Recovery is manual; nothing here removes pending or resends on its own.
 //
 // Logs carry only: Deal ID, event name, result, HTTP status, events_received,
 // fbtrace_id and a skip/failure reason. Never tokens, bodies or personal data.
@@ -92,7 +95,10 @@ function text(v) {
 /** The only safe log line. Nothing personal or secret is ever passed in here. */
 function logResult(fields) {
   const line = '[deal-qualified] ' + JSON.stringify(fields);
-  if (fields.result === 'sent' || fields.result === 'duplicate' || fields.result === 'skipped') {
+  // A pending marker without a sent marker may be a stuck Deal; warn so it can be found.
+  if (fields.result === 'warning' || fields.reason === 'pending_marker_present') {
+    console.warn(line);
+  } else if (fields.result === 'sent' || fields.result === 'duplicate' || fields.result === 'skipped') {
     console.info(line);
   } else {
     console.error(line);
@@ -353,7 +359,18 @@ async function processDeal(dealId) {
   };
 
   if (!meta.accepted) {
-    await setTag(token, dealId, 'remove_tags', TAG_PENDING);
+    if (!(await setTag(token, dealId, 'remove_tags', TAG_PENDING))) {
+      // The Deal now stays blocked by the pending guard until the tag is removed by hand.
+      // meta_status 0 means no response (network error or timeout): Meta may have the event.
+      logResult({
+        deal_id: dealId,
+        event: mapping.event,
+        result: 'warning',
+        reason: 'pending_cleanup_failed',
+        meta_reason: meta.reason,
+        meta_status: meta.status,
+      });
+    }
     return Object.assign({
       status: meta.reason === 'meta_unavailable' ? 503 : 502,
       result: 'failed',

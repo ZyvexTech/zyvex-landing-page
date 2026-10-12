@@ -38,6 +38,7 @@ function sha(v) { return crypto.createHash('sha256').update(v.trim().toLowerCase
 let state;
 let calls;
 let logs = [];
+let logLevels = [];     // [level, line] pairs, same lines as logs
 
 function reset(overrides) {
   const o = overrides || {};
@@ -124,7 +125,11 @@ global.fetch = async function (url, opts) {
 };
 
 for (const level of ['info', 'warn', 'error', 'log']) {
-  console[level] = function () { logs.push(Array.from(arguments).join(' ')); };
+  console[level] = function () {
+    const line = Array.from(arguments).join(' ');
+    logs.push(line);
+    logLevels.push([level, line]);
+  };
 }
 
 async function call(opts) {
@@ -554,6 +559,92 @@ test('known limitation: simultaneous deliveries can both send, with one shared e
   assert.ok(metaCalls().length >= 1 && metaCalls().length <= 2);
   const ids = new Set(metaCalls().map((c) => c.body.data[0].event_id));
   assert.deepEqual([...ids], ['zxq-' + DEAL_ID]);
+});
+
+/* ---- stuck-pending logging ---- */
+
+const FORBIDDEN_IN_LOGS = [SECRET, 'test-capi-token', 'test-access', 'test-deals-refresh', 'test-client-secret',
+  EMAIL, EMAIL.toLowerCase(), 'old@example.com', '98765', '9999999999', IP, UA, 'TestAgent', FBC, FBP,
+  sha(EMAIL), sha('+919876543210')];
+
+function cleanupWarnings() {
+  return logLevels.filter(([, l]) => l.includes('"reason":"pending_cleanup_failed"'));
+}
+
+test('pending cleanup failure after a Meta rejection is logged as a safe warning; response unchanged', async () => {
+  logs = []; logLevels = [];
+  reset({
+    tagFails: { 'remove_tags:meta-qualified-pending': true },
+    metaResponses: [{ status: 400, json: { error: { code: 100, message: 'Invalid ' + EMAIL, fbtrace_id: 'trace-bad' } } }],
+  });
+  const r = await call();
+  assert.equal(r.status, 502);
+  assert.deepEqual(r.body, { ok: false, result: 'failed', reason: 'meta_rejected' });
+  assert.equal(metaCalls().length, 1);
+  assert.deepEqual(tagNames(), ['meta-qualified-pending']);
+
+  const warnings = cleanupWarnings();
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0][0], 'warn');
+  assert.deepEqual(JSON.parse(warnings[0][1].replace('[deal-qualified] ', '')), {
+    deal_id: DEAL_ID, event: 'QualifiedFullStackLead', result: 'warning',
+    reason: 'pending_cleanup_failed', meta_reason: 'meta_rejected', meta_status: 400,
+  });
+  // the request's own outcome line is still written, unchanged
+  assert.ok(logLevels.some(([lvl, l]) => lvl === 'error' && l.includes('"result":"failed"') && l.includes('"reason":"meta_rejected"')));
+  const all = logs.join('\n');
+  for (const f of FORBIDDEN_IN_LOGS) assert.ok(!all.includes(f), 'log leaked: ' + f);
+  assert.ok(!all.includes('Invalid'), 'Meta error message must not be logged');
+});
+
+test('pending cleanup failure after a timeout or network error logs meta_status 0 (ambiguous)', async () => {
+  logs = []; logLevels = [];
+  reset({ tagFails: { 'remove_tags:meta-qualified-pending': true }, metaResponses: [{ throws: true }] });
+  const r = await call();
+  assert.equal(r.status, 503);
+  assert.equal(r.body.reason, 'meta_unavailable');
+  const [w] = cleanupWarnings();
+  const parsed = JSON.parse(w[1].replace('[deal-qualified] ', ''));
+  assert.equal(parsed.meta_reason, 'meta_unavailable');
+  assert.equal(parsed.meta_status, 0);
+  // still blocked: the next delivery does not send
+  const again = await call();
+  assert.equal(again.body.reason, 'pending_marker_present');
+  assert.equal(metaCalls().length, 1);
+});
+
+test('successful pending cleanup logs no warning and keeps the retry path', async () => {
+  logs = []; logLevels = [];
+  reset({ metaResponses: [
+    { status: 503, json: { error: { code: 2 } } },
+    { status: 200, json: { events_received: 1, fbtrace_id: 'trace-ok' } },
+  ] });
+  let r = await call();
+  assert.equal(r.status, 503);
+  assert.deepEqual(tagNames(), []);
+  assert.equal(cleanupWarnings().length, 0);
+  r = await call();
+  assert.equal(r.body.result, 'sent');
+  assert.equal(metaCalls().length, 2);
+  assert.equal(cleanupWarnings().length, 0);
+});
+
+test('a delivery skipped by the pending guard logs at warn; already_sent stays at info', async () => {
+  logs = []; logLevels = [];
+  reset({ deal: { Tag: [{ name: 'meta-qualified-pending' }] } });
+  let r = await call();
+  assert.equal(r.status, 200);
+  assert.equal(r.body.reason, 'pending_marker_present');
+  assert.equal(metaCalls().length, 0);
+  assert.equal(tagCalls().length, 0);
+  assert.deepEqual(logLevels.filter(([, l]) => l.includes('pending_marker_present')).map(([lvl]) => lvl), ['warn']);
+
+  logLevels = [];
+  reset({ deal: { Tag: [{ name: 'meta-qualified-sent' }, { name: 'meta-qualified-pending' }] } });
+  r = await call();
+  assert.equal(r.body.reason, 'already_sent');
+  assert.equal(metaCalls().length, 0);
+  assert.deepEqual(logLevels.map(([lvl]) => lvl), ['info']);
 });
 
 /* ---- logging ---- */
