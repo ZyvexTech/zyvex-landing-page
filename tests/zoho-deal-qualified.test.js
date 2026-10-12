@@ -485,6 +485,77 @@ test('accepted by Meta but sent marker fails: 200 so Zoho does not redeliver', a
   assert.equal(metaCalls().length, 1);
 });
 
+/* ---- pending marker ---- */
+
+test('a Deal already tagged as pending (not sent) is skipped: no Meta call, tags untouched', async () => {
+  logs = [];
+  reset({ deal: { Tag: [{ name: 'meta-qualified-pending' }] } });
+  const r = await call();
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body, { ok: true, result: 'duplicate', reason: 'pending_marker_present' });
+  assert.equal(metaCalls().length, 0);
+  assert.equal(tagCalls().length, 0);
+  assert.deepEqual(tagNames(), ['meta-qualified-pending']);
+  const line = logs.find((l) => l.includes('"reason":"pending_marker_present"'));
+  assert.ok(line, 'skip is logged');
+  assert.deepEqual(JSON.parse(line.replace('[deal-qualified] ', '')),
+    { deal_id: DEAL_ID, result: 'duplicate', reason: 'pending_marker_present' });
+});
+
+test('after sent_unmarked, a later delivery does not send again', async () => {
+  reset({ tagFails: { 'add_tags:meta-qualified-sent': true } });
+  const first = await call();
+  assert.equal(first.body.result, 'sent_unmarked');
+  assert.deepEqual(tagNames(), ['meta-qualified-pending']);
+  const tagCallsAfterFirst = tagCalls().length;
+
+  const second = await call();
+  assert.equal(second.status, 200);
+  assert.equal(second.body.result, 'duplicate');
+  assert.equal(second.body.reason, 'pending_marker_present');
+  assert.equal(metaCalls().length, 1);
+  assert.equal(tagCalls().length, tagCallsAfterFirst);
+  assert.deepEqual(tagNames(), ['meta-qualified-pending']);
+});
+
+test('Meta rejection clears pending, so the next delivery is sent once', async () => {
+  reset({ metaResponses: [
+    { status: 400, json: { error: { code: 100, fbtrace_id: 'trace-bad' } } },
+    { status: 200, json: { events_received: 1, fbtrace_id: 'trace-ok' } },
+  ] });
+  let r = await call();
+  assert.equal(r.status, 502);
+  assert.deepEqual(tagNames(), []);
+  r = await call();
+  assert.equal(r.status, 200);
+  assert.equal(r.body.result, 'sent');
+  assert.deepEqual(tagNames(), ['meta-qualified-sent']);
+  assert.equal(metaCalls().length, 2);
+});
+
+test('Meta failure with failed pending cleanup leaves the Deal blocked (no automatic resend)', async () => {
+  reset({
+    tagFails: { 'remove_tags:meta-qualified-pending': true },
+    metaResponses: [{ status: 500, json: { error: { code: 2 } } }],
+  });
+  let r = await call();
+  assert.equal(r.status, 503);
+  assert.deepEqual(tagNames(), ['meta-qualified-pending']);
+  r = await call();
+  assert.equal(r.status, 200);
+  assert.equal(r.body.reason, 'pending_marker_present');
+  assert.equal(metaCalls().length, 1);
+});
+
+test('known limitation: simultaneous deliveries can both send, with one shared event_id', async () => {
+  reset();
+  const results = await Promise.all([call(), call()]);
+  for (const r of results) assert.equal(r.status, 200);
+  assert.ok(metaCalls().length >= 1 && metaCalls().length <= 2);
+  const ids = new Set(metaCalls().map((c) => c.body.data[0].event_id));
+  assert.deepEqual([...ids], ['zxq-' + DEAL_ID]);
+});
+
 /* ---- logging ---- */
 
 test('logs never contain secrets or personal data', async () => {
