@@ -9,26 +9,22 @@
      zx_ft   first touch   — written once; permanent retention (never expires while valid)
      zx_lt   latest touch  — 90-day retention; replaced when a different attribution set arrives
      zx_mj   CURRENT META JOURNEY {v, src:"meta", ts, fbc, fbclid, u} — the only source of the
-             fbc/fbclid the form sends. Started by a Meta click (fbclid in the URL, or a click
-             redeemed through zx_hid), it survives reloads and navigation between our own pages and
+             fbc/fbclid the form sends. Started by a Meta click (fbclid in the URL, or a valid
+             zx_mc carrier), it survives reloads and navigation between our own pages and
              tabs, and ends after 1 hour or at the next entry that is not a Meta click
              (typed URL, bookmark, external link, search). ft/lt are history only; they never
              decide whether a visitor is on a Meta journey.
 
-   Cross-browser handoff (zx_hid, api/attribution-handoff.js):
-     zx_hid  random 256-bit handle (crypto.getRandomValues) an in-app browser (WebView A)
-             registers with the backend for its Meta click, then adds to its address bar
-             with history.replaceState once registration succeeded. The backend keeps the
-             click for 5 minutes from registration (Upstash Redis, never extended). If an
-             external browser (Browser B) opens the page with that handle and has no Meta
-             click of its own in the URL, it redeems the handle once (atomic read-and-delete),
-             continues the same Meta journey with the original fbc and time, and strips
-             zx_hid from the address bar. fbp is never carried: Browser B uses its own _fbp.
-             zx_hid is never sent to Zoho or Meta as an attribution value.
-     zx_mc   retired URL carrier; now stripped and ignored.
+   Cross-browser carrier (URL parameter, 1-hour lifetime):
+     zx_mc   compact Base64URL payload carrying Meta click attribution from an in-app
+             browser (WebView A) to an external browser (Browser B). Maintained in the
+             address bar of an in-app browser across internal page exploration within 1
+             hour of the click. Consumed once by the receiving external browser, which
+             starts its own Meta journey from it, then immediately stripped from the
+             address bar. Never propagated further.
 
    Nothing is fabricated: no fbclid/fbc/fbp is produced unless it came from
-   the URL, a valid unexpired zx_hid handoff record, or Meta's own cookies. Every
+   the URL, a valid unexpired zx_mc carrier, or Meta's own cookies. Every
    storage/cookie access is guarded, so blocked storage or cookies can never
    break the page or the lead form.
 
@@ -38,16 +34,10 @@
   'use strict';
 
   var RETENTION_MS        = 90 * 24 * 60 * 60 * 1000; // latest-touch & fbc retention: 90 days
-  var CARRIER_RETENTION_MS = 60 * 60 * 1000;           // handoff only for clicks under 1 hour old
+  var CARRIER_RETENTION_MS = 60 * 60 * 1000;           // zx_mc carrier lifetime: 1 hour
   var JOURNEY_MS          = CARRIER_RETENTION_MS;      // Meta journey: 1 hour from the click, never extended
   var CLOCK_SKEW_MS       = 5 * 60 * 1000;             // tolerated clock drift on a stored timestamp
   var JOURNEY_KEY         = 'zx_mj';
-  var HANDOFF_PARAM       = 'zx_hid';
-  var HANDOFF_KEY         = 'zx_hd';                   // this browser's own registration {hid, fbclid, exp}
-  var HANDOFF_URL         = '/api/attribution-handoff/';
-  var HANDOFF_TTL_MS      = 5 * 60 * 1000;             // backend record lifetime, from registration
-  var HANDOFF_MARGIN_MS   = 30 * 1000;                 // stop advertising a handle this close to expiry
-  var HANDOFF_TIMEOUT_MS  = 5000;
 
   var UTM_KEYS = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id'];
   var SET_KEYS = UTM_KEYS.concat(['fbclid', 'gclid']);
@@ -55,7 +45,6 @@
   var RE_CLICK_ID = /^[\w-]{10,500}$/;                 // fbclid / gclid
   var RE_FBC      = /^fb\.[0-2]\.\d{13}\.[\w-]{10,500}$/;
   var RE_FBP      = /^fb\.[0-2]\.\d{13}\.\d{5,30}$/;
-  var RE_HID      = /^[A-Za-z0-9_-]{43}$/;            // zx_hid: 32 random bytes, Base64URL
 
   function validFbc(v)     { return typeof v === 'string' && RE_FBC.test(v); }
   function validFbp(v)     { return typeof v === 'string' && RE_FBP.test(v); }
@@ -69,7 +58,7 @@
   // valid format AND embedded click time no older than 90 days
   function usableFbc(v)    { return validFbc(v) && Date.now() - fbcTime(v) < RETENTION_MS; }
 
-  // Handoff eligibility: the zx_mj journey record must be valid and strictly < 1 hour old.
+  // Carrier eligibility: the zx_mj journey record must be valid and strictly < 1 hour old.
   // Absolute 1-hour rule: both stored capture time AND embedded click time must be < 1 hour.
   function carrierFresh(rec) {
     if (!rec || typeof rec !== 'object') return false;
@@ -167,8 +156,8 @@
   }
 
   /* ── in-app browser / WebView detection ── */
-  // Used to decide whether to register and maintain zx_hid in the address bar.
-  // The receiving Browser B does NOT need to pass this check to redeem zx_hid.
+  // Used to decide whether to generate and maintain zx_mc in the address bar.
+  // The receiving Browser B does NOT need to pass this check to consume zx_mc.
   function isInAppBrowser() {
     try {
       var ua = (w.navigator && w.navigator.userAgent) ? String(w.navigator.userAgent) : '';
@@ -180,143 +169,179 @@
     } catch (e) { return false; }
   }
 
-  /* ── URL parameters (history.replaceState, never a reload) ── */
-  // Rebuilds the query string keeping every other parameter, the path and the hash.
-  function setParam(name, value) {
+  /* ── zx_mc carrier: Base64URL encode / decode ── */
+  function b64urlEncode(str) {
     try {
-      var loc = w.location, h = w.history;
-      if (!h || !h.replaceState) return false;
-      var kept = String(loc.search || '').replace(/^\?/, '').split('&').filter(function (p) {
-        return p && p.split('=')[0] !== name;
-      });
-      if (value) kept.push(name + '=' + encodeURIComponent(value));
-      var qs = kept.length ? '?' + kept.join('&') : '';
-      h.replaceState(h.state, '', loc.pathname + qs + (loc.hash || ''));
-      return true;
-    } catch (e) { return false; }   // history API unavailable — attribution still works
-  }
-  function stripParam(name) { return setParam(name, ''); }
-  function urlParam(name) {
-    try { return new URLSearchParams(w.location.search).get(name) || ''; } catch (e) { return ''; }
-  }
-
-  /* ── zx_hid handoff: random handle + backend calls ── */
-  // 32 bytes from the browser's CSPRNG, Base64URL (43 chars). No CSPRNG → no handoff.
-  function newHid() {
-    try {
-      var c = w.crypto || w.msCrypto;
-      if (!c || !c.getRandomValues) return '';
-      var b = new Uint8Array(32);
-      c.getRandomValues(b);
-      var s = '';
-      for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
-      var out = w.btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-      return RE_HID.test(out) ? out : '';
+      return w.btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
     } catch (e) { return ''; }
   }
-  function canCallApi() {
-    return typeof w.fetch === 'function' && typeof w.Promise === 'function';
-  }
-  // POST to the handoff endpoint. Resolves {status, data}, or null on a network error/timeout.
-  function handoffApi(body) {
-    return new w.Promise(function (resolve) {
-      var done = false;
-      function finish(v) { if (!done) { done = true; resolve(v); } }
-      setTimeout(function () { finish(null); }, HANDOFF_TIMEOUT_MS);
-      try {
-        w.fetch(HANDOFF_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          credentials: 'omit',
-          cache: 'no-store'
-        }).then(function (r) {
-          return r.json().then(function (d) { return d; }, function () { return null; })
-            .then(function (d) { finish({ status: r.status, data: d }); });
-        }, function () { finish(null); });
-      } catch (e) { finish(null); }
-    });
-  }
-  // A click returned by the backend: same shape and consistency rules as a local click.
-  function validRecovered(d) {
-    return !!d && d.ok === true && validClickId(d.fbclid) && validFbc(d.fbc) &&
-      fbcClickId(d.fbc) === d.fbclid && typeof d.ts === 'number';
-  }
-  // This browser's own registration {hid, fbclid, exp}, if any.
-  function ownHandoff() {
-    var h = load(HANDOFF_KEY);
-    return h && RE_HID.test(h.hid || '') && validClickId(h.fbclid) && typeof h.exp === 'number' ? h : null;
+  function b64urlDecode(str) {
+    try {
+      var s = String(str).replace(/-/g, '+').replace(/_/g, '/');
+      var pad = s.length % 4;
+      if (pad === 2) s += '==';
+      else if (pad === 3) s += '=';
+      return w.atob(s);
+    } catch (e) { return ''; }
   }
 
-  /* ── read this page ── */
-  var inApp     = isInAppBrowser();
-  var current   = readUrl();              // this page's URL attribution (UTM/fbclid/gclid)
-  var urlFbclid = current.fbclid || '';   // a Meta click in THIS address bar
+  /* ── zx_mc: read and validate the carrier from the current URL ── */
+  // Returns a plain-object payload when valid; null otherwise.
+  // Validity requires: correct version, valid fbclid, numeric timestamps,
+  // and carrier age strictly less than CARRIER_RETENTION_MS (1 hour).
+  function readCarrier() {
+    try {
+      var raw = new URLSearchParams(w.location.search).get('zx_mc');
+      if (!raw) return null;
+      var decoded = b64urlDecode(raw);
+      if (!decoded) return null;
+      var p = JSON.parse(decoded);
+      if (!p || typeof p !== 'object') return null;
+      if (p.v !== 1) return null;                              // unknown version → ignore
+      if (!validClickId(p.c)) return null;                     // invalid fbclid
+      if (typeof p.t !== 'number' || typeof p.ot !== 'number') return null;
+      var now = Date.now();
+      if (now - p.t >= CARRIER_RETENTION_MS || now - p.ot >= CARRIER_RETENTION_MS) return null; // expired (>= 1 hour)
+      return p;                                                // valid payload
+    } catch (e) { return null; }
+  }
 
-  // zx_mc (retired URL carrier) is no longer trusted: a click crosses browsers only
-  // through a registered zx_hid handoff record.
-  if (urlParam('zx_mc')) stripParam('zx_mc');
+  /* ── zx_mc: build the carrier payload from a known Meta click ── */
+  // Crucial: carrierCreatedTs is the ORIGINAL click/capture timestamp (never Date.now() on navigation),
+  // ensuring the 1-hour window is absolute and cannot be extended by navigating.
+  function buildCarrier(fbclid, originalClickTs, carrierCreatedTs, utmMap) {
+    try {
+      var payload = { v: 1, c: fbclid, t: carrierCreatedTs, ot: originalClickTs };
+      var u = {};
+      if (utmMap) {
+        if (utmMap.utm_source   || utmMap.s)  u.s  = String(utmMap.utm_source   || utmMap.s).slice(0, 100);
+        if (utmMap.utm_medium   || utmMap.m)  u.m  = String(utmMap.utm_medium   || utmMap.m).slice(0, 100);
+        if (utmMap.utm_campaign || utmMap.c)  u.c  = String(utmMap.utm_campaign || utmMap.c).slice(0, 100);
+        if (utmMap.utm_content  || utmMap.ct) u.ct = String(utmMap.utm_content  || utmMap.ct).slice(0, 100);
+        if (utmMap.utm_term     || utmMap.tr) u.tr = String(utmMap.utm_term     || utmMap.tr).slice(0, 100);
+        if (utmMap.utm_id       || utmMap.i)  u.i  = String(utmMap.utm_id       || utmMap.i).slice(0, 100);
+      }
+      if (Object.keys(u).length) payload.u = u;
+      return b64urlEncode(JSON.stringify(payload));
+    } catch (e) { return ''; }
+  }
 
-  // zx_hid in the URL is either this browser's own handle (an in-app browser reloading or
-  // re-showing it) or one handed over from another browser, which we try to redeem.
-  var incomingHid = '';
-  (function readHandoffParam() {
-    var hid = urlParam(HANDOFF_PARAM);
-    if (!hid) return;
-    if (!RE_HID.test(hid)) { stripParam(HANDOFF_PARAM); return; }      // malformed
-    var own = ownHandoff();
-    if (own && own.hid === hid) return;                                 // ours: maintained below
-    // A Meta click in this URL is current attribution and wins; the handle is not needed.
-    if (urlFbclid || !canCallApi()) { stripParam(HANDOFF_PARAM); return; }
-    incomingHid = hid;
-  })();
+  /* ── zx_mc: write the carrier into the current URL (in-app browser only) ── */
+  function writeCarrier(encoded) {
+    try {
+      if (!encoded) return;
+      var loc = w.location, h = w.history;
+      if (!h || !h.replaceState) return;
+      // If an identical carrier already exists in the URL, skip (idempotent)
+      var existing = new URLSearchParams(loc.search).get('zx_mc');
+      if (existing === encoded) return;
+      // Rebuild query string: keep all existing params except zx_mc, then append new one
+      var kept = String(loc.search || '').replace(/^\?/, '').split('&').filter(function (p) {
+        return p && p.split('=')[0] !== 'zx_mc';
+      });
+      kept.push('zx_mc=' + encoded);
+      h.replaceState(h.state, '', loc.pathname + '?' + kept.join('&') + (loc.hash || ''));
+    } catch (e) { /* history API unavailable — attribution still works */ }
+  }
+
+  /* ── zx_mc: strip the carrier from the URL after consumption or expiration ── */
+  function stripCarrier() {
+    try {
+      var loc = w.location, h = w.history;
+      if (!h || !h.replaceState) return;
+      var kept = String(loc.search || '').replace(/^\?/, '').split('&').filter(function (p) {
+        return p && p.split('=')[0] !== 'zx_mc';
+      });
+      var qs = kept.length ? '?' + kept.join('&') : '';
+      h.replaceState(h.state, '', loc.pathname + qs + (loc.hash || ''));
+    } catch (e) { /* ignore */ }
+  }
+
+  /* ── capture on landing ── */
+  var inApp           = isInAppBrowser();
+  var current         = readUrl();          // this page's URL attribution (UTM/fbclid/gclid)
+  var urlFbclid       = current.fbclid || ''; // a Meta click in THIS address bar (before any carrier merge)
+  var rawCarrier      = null;
+  try { rawCarrier = new URLSearchParams(w.location.search).get('zx_mc'); } catch (e) {}
+
+  var carrierPayload  = readCarrier();
+  var carrierConsumed = false;
+
+  // Clean up invalid or expired zx_mc from the address bar immediately
+  if (rawCarrier && !carrierPayload) {
+    stripCarrier();
+  }
+
+  // Handle valid zx_mc in the URL
+  if (carrierPayload) {
+    if (!current.fbclid) {
+      current.fbclid = carrierPayload.c;
+    }
+    // Restore campaign UTMs from carrier if not already in URL
+    if (carrierPayload.u) {
+      var umap = carrierPayload.u;
+      if (!current.utm_source   && umap.s)  current.utm_source   = cleanText(umap.s);
+      if (!current.utm_medium   && umap.m)  current.utm_medium   = cleanText(umap.m);
+      if (!current.utm_campaign && umap.c)  current.utm_campaign = cleanText(umap.c);
+      if (!current.utm_content  && umap.ct) current.utm_content  = cleanText(umap.ct);
+      if (!current.utm_term     && umap.tr) current.utm_term     = cleanText(umap.tr);
+      if (!current.utm_id       && umap.i)  current.utm_id       = cleanText(umap.i);
+    }
+    if (!inApp) {
+      // Browser B (external Chrome/Safari breakout):
+      // Consume carrier, persist attribution, and immediately strip zx_mc from URL.
+      carrierConsumed = true;
+      stripCarrier();
+    }
+    // In Browser A (inApp === true), keep existing valid zx_mc in the URL without stripping
+  }
 
   /* ── Meta journey: start, keep, or end ── */
   // One record (zx_mj) answers "did this visitor come from a Meta ad?":
-  //   Meta click on this page (URL fbclid, or a click redeemed via zx_hid) → start / keep the journey
-  //   no click, but reload / back / click from our own page                → keep the journey
-  //   no click, fresh arrival from outside the site                        → end it (stale protection)
+  //   Meta click on this page (URL fbclid, or a valid carrier) → start / keep the journey
+  //   no click, but reload / back / click from our own page    → keep the journey
+  //   no click, fresh arrival from outside the site            → end it (stale protection)
   // Nothing is fabricated: fbc comes from the click id, never from IP, user agent or timing.
   var journey = null;
   remove('zx_fbc');                          // retired store, superseded by zx_mj
-
-  // Starts or keeps the journey for a click. Returns true when the click was handled
-  // (journey set, or deliberately not restarted), false to fall back to the no-click rules.
-  function startJourney(click) {
+  (function establishJourney() {
     var now = Date.now();
     var raw = load(JOURNEY_KEY);               // last journey record, active or not
     var stored = validJourney(raw) ? raw : null;
-    if (stored && stored.fbclid === click.fbclid) { journey = stored; return true; } // same click seen again: keep original
-    // A click starts at most one journey: once it has expired or ended, reloading or
-    // reopening that old ad URL does not start another. Only a different Meta click does.
-    if (raw && raw.fbclid === click.fbclid) return true;
-    var fbc = click.fbc;
-    if (!fbc) {
-      var metaFbc = cookie('_fbc');
-      fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === click.fbclid)
-        ? metaFbc                                            // Meta already created one for this click
-        : 'fb.1.' + now + '.' + click.fbclid;                // first capture time, not submit time
+
+    var click = urlFbclid
+      ? { fbclid: urlFbclid, ts: now, fbc: '' }
+      : (carrierPayload
+          ? { fbclid: carrierPayload.c, ts: carrierPayload.ot, fbc: 'fb.1.' + carrierPayload.ot + '.' + carrierPayload.c }
+          : null);
+
+    if (click) {
+      if (stored && stored.fbclid === click.fbclid) { journey = stored; return; } // same click seen again: keep original
+      // A click starts at most one journey: once it has expired or ended, reloading or
+      // reopening that old ad URL does not start another. Only a different Meta click does.
+      if (raw && raw.fbclid === click.fbclid) return;
+      var fbc = click.fbc;
+      if (!fbc) {
+        var metaFbc = cookie('_fbc');
+        fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === click.fbclid)
+          ? metaFbc                                            // Meta already created one for this click
+          : 'fb.1.' + now + '.' + click.fbclid;                // first capture time, not submit time
+      }
+      var u = {};
+      UTM_KEYS.forEach(function (k) { if (current[k]) u[k] = current[k]; });
+      var rec = { v: 1, src: 'meta', ts: click.ts, fbc: fbc, fbclid: click.fbclid, u: u };
+      if (validJourney(rec)) { journey = rec; save(JOURNEY_KEY, rec); return; }
     }
-    var u = {};
-    UTM_KEYS.forEach(function (k) { if (current[k]) u[k] = current[k]; });
-    var rec = { v: 1, src: 'meta', ts: click.ts, fbc: fbc, fbclid: click.fbclid, u: u };
-    if (validJourney(rec)) { journey = rec; save(JOURNEY_KEY, rec); return true; }
-    return false;
-  }
-  function noClickJourney() {
-    var raw = load(JOURNEY_KEY);
-    var stored = validJourney(raw) ? raw : null;
+
     if (stored && !isNewEntry()) { journey = stored; return; }
     // New entry from outside the site: the journey is over. The record is kept (marked
     // ended) rather than deleted, so history stays and the old click cannot be restarted.
     if (stored) save(JOURNEY_KEY, Object.assign({}, stored, { ended: true }));
-  }
+  })();
 
-  /* ── first / latest touch ── */
-  // ts: when this touch happened; a redeemed click keeps its original time.
-  function capture(ts) {
+  (function capture() {
     if (!Object.keys(current).length) return;
-    var now = typeof ts === 'number' ? ts : Date.now();
+    var now = Date.now();
     var path = '';
     try { path = String(w.location.pathname || '').slice(0, 200); } catch (e) {}
 
@@ -330,92 +355,31 @@
 
     // first touch: write once; permanent retention (never expires while valid)
     if (!validFt(load('zx_ft'))) save('zx_ft', touch);
-  }
+  })();
 
-  /* ── zx_hid maintenance (Browser A — in-app browser only) ── */
-  // While a Meta journey is under 1 hour old, keep a registered handle in the address bar
-  // so "Open in Chrome/Safari" hands it over. One registration covers every page for its
-  // 5-minute lifetime; a new one is made only after it lapses. Links are not rewritten.
-  function maintainHandoff() {
-    if (!inApp) return;                    // normal Chrome/Safari/desktop: never register
-    var inUrl = urlParam(HANDOFF_PARAM);
-    var j = (!current.gclid && carrierFresh(journey)) ? journey : null;
-    if (!j) { if (inUrl) stripParam(HANDOFF_PARAM); return; }
+  /* ── zx_mc maintenance (Browser A — in-app browser only) ── */
+  // Maintains zx_mc in the address bar across internal page exploration inside an
+  // in-app browser, so that whenever the user selects "Open in Chrome/Safari",
+  // the external browser receives the current page URL with the attribution carrier attached.
+  (function maybeMaintainCarrier() {
+    if (!inApp) return;                    // normal Chrome/Safari/desktop: never maintain
+    if (carrierConsumed) return;           // Browser B: never maintain
+    if (current.gclid) return;             // Google click: do not generate Meta carrier
 
-    var now = Date.now();
-    var own = ownHandoff();
-    if (own && own.fbclid === j.fbclid && own.exp - now > HANDOFF_MARGIN_MS) {
-      if (inUrl !== own.hid) setParam(HANDOFF_PARAM, own.hid);
-      return;
-    }
-    if (inUrl) stripParam(HANDOFF_PARAM);  // lapsed handle: never advertise it
-    if (!canCallApi()) return;
-    var hid = newHid();
-    if (!hid) return;
+    // If current URL already contains a valid zx_mc, preserve it (do not regenerate or refresh ts)
+    if (carrierPayload) return;
 
-    // The click this browser would report: Meta's own _fbc for the same click, else ours.
-    var metaFbc = cookie('_fbc');
-    var fbc = (usableFbc(metaFbc) && fbcClickId(metaFbc) === j.fbclid) ? metaFbc : j.fbc;
-    var body = { action: 'register', hid: hid, fbclid: j.fbclid, fbc: fbc, ts: j.ts, u: j.u || {} };
-    function attempt(left) {
-      handoffApi(body).then(function (r) {
-        if (r && r.status === 200 && r.data && r.data.ok) {
-          // Only now is the carrier real: remember it and put it in the address bar.
-          save(HANDOFF_KEY, { hid: hid, fbclid: j.fbclid, exp: now + HANDOFF_TTL_MS });
-          setParam(HANDOFF_PARAM, hid);
-          return;
-        }
-        // Network error or storage outage: retry once with the SAME handle (the server
-        // treats an identical re-registration as success, so no second record is made).
-        if (left > 0 && (!r || r.status >= 500)) setTimeout(function () { attempt(left - 1); }, 1000);
-      });
-    }
-    attempt(1);
-  }
+    // Needs an active Meta journey whose click is < 1 hour old
+    var stored = journey;
+    if (!carrierFresh(stored)) return;     // no click, or click >= 1 hour old: do NOT generate
 
-  /* ── run ── */
-  if (!incomingHid) {
-    if (!(urlFbclid && startJourney({ fbclid: urlFbclid, ts: Date.now(), fbc: '' }))) noClickJourney();
-    capture();
-    maintainHandoff();
-  } else {
-    // Browser B: redeem the handle before deciding the journey or writing touches, so a
-    // handed-over click is recorded as the Meta touch it is. Until then a journey this
-    // browser already had stays readable.
-    (function () { var s = load(JOURNEY_KEY); if (validJourney(s)) journey = s; })();
-    handoffApi({ action: 'retrieve', hid: incomingHid }).then(function (r) {
-      var d = r && r.status === 200 ? r.data : null;
-      var touchTs;
-      if (validRecovered(d)) {
-        var before = Object.assign({}, current);
-        current.fbclid = d.fbclid;
-        var ru = d.u && typeof d.u === 'object' ? d.u : {};
-        UTM_KEYS.forEach(function (k) {
-          var v = cleanText(ru[k]);
-          if (!current[k] && v) current[k] = v;
-        });
-        journey = null;
-        if (startJourney({ fbclid: d.fbclid, ts: d.ts, fbc: d.fbc })) {
-          touchTs = d.ts;
-        } else {
-          noClickJourney();
-        }
-        if (!journey || journey.fbclid !== d.fbclid) {
-          // Not usable here (already used or expired in this browser): drop it entirely.
-          current = before;
-          touchTs = undefined;
-        }
-      } else {
-        journey = null;
-        noClickJourney();
-      }
-      // Remove the handle once the answer is final; keep it after a network error or
-      // storage outage so a reload can try again (the record was not consumed).
-      if (r && r.status < 500) stripParam(HANDOFF_PARAM);
-      capture(touchTs);
-      maintainHandoff();
-    });
-  }
+    // Build carrier using the ORIGINAL click/capture timestamp (never Date.now())
+    var originalClickTs  = fbcTime(stored.fbc);
+    var carrierCreatedTs = stored.ts;     // original capture timestamp!
+    var utmSource        = stored.u || current;
+    var encoded = buildCarrier(stored.fbclid, originalClickTs, carrierCreatedTs, utmSource);
+    if (encoded) writeCarrier(encoded);
+  })();
 
   // The journey to report right now: re-checked on every call so an expired one is never sent.
   function activeJourney() {
