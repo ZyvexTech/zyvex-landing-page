@@ -499,6 +499,13 @@ background:rgba(10,154,127,.08);border:1px solid rgba(6,122,100,.22);color:var(-
 .client-flags img{width:18px;height:12px;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.1)}
 .client-logo{height:44px;display:flex;align-items:center}
 @media(max-width:640px){.client-marquee .logo-set{gap:38px;padding-right:38px}.client-logo img{transform:scale(.8)}.client-marquee .logo-track{animation-duration:34s}}
+/* co-founder (mirrors the founder block) + team group photo */
+.founder-photo{border-radius:18px;overflow:hidden;aspect-ratio:4/5;background:#e9eeec}
+.founder-photo img{width:100%;height:100%;object-fit:cover;object-position:50% 30%;display:block}
+@media(min-width:901px){.founder-rev{grid-template-columns:1fr 340px}.founder-rev .founder-photo{order:2}}
+@media(max-width:900px){.founder-photo{max-width:340px}}
+.team-group{margin:40px auto 0;max-width:1100px;border-radius:20px;overflow:hidden;box-shadow:0 24px 60px -34px rgba(13,18,17,.35)}
+.team-group img{display:block;width:100%;height:auto}
 /* testimonials v2 */
 @media(min-width:901px){.quotes.two{grid-template-columns:1fr 1fr}}
 .quotes.two{max-width:1040px;margin-left:auto;margin-right:auto}
@@ -781,6 +788,27 @@ reporting, campaigns run for performance, and retention flows that turn first or
 </div>
 </div>
 </section>
+<!-- ── co-founder ─────────────────────────────────── -->
+<section class="section rv" id="cofounder" style="scroll-margin-top:72px">
+<div class="wrap">
+<div class="center">
+<span class="kicker">Our Co-Founder</span>
+</div>
+<div class="founder founder-rev">
+<div class="founder-photo"><img src="/assets/farhan-ahammed.jpg" alt="Farhan Ahammed, co-founder of Zyvex Tech" width="960" height="1200" loading="lazy" decoding="async"></div>
+<div>
+<p class="founder-quote balance">
+Build it properly. Run it like it is our own<span class="dot">.</span>
+</p>
+<p class="card-body" style="max-width:52ch">
+Farhan works alongside Syed on every engagement, making sure what gets planned is built,
+launched and looked after, with the same team accountable from the first call to the monthly report.
+</p>
+<p class="founder-by">Farhan Ahammed &#183; Co-Founder</p>
+</div>
+</div>
+</div>
+</section>
 <!-- ── team ──────────────────────────────────────────── -->
 <section class="section rv" id="team" style="scroll-margin-top:72px">
 <div class="wrap">
@@ -791,6 +819,7 @@ reporting, campaigns run for performance, and retention flows that turn first or
 The people who build, run and report on your store. No junior bench, no hand-offs.
 </p>
 </div>
+<figure class="team-group"><img src="/assets/team/team-group.jpg" alt="The Zyvex Tech team" width="1600" height="1067" loading="lazy" decoding="async"></figure>
 <div class="team">
 <div class="team-card">
 <div class="team-img"><img src="/assets/team/zayd-abdulla.jpg" alt="Zayd Abdulla, Conversion Tracking &amp; Shopify Expert" width="720" height="900" loading="lazy" decoding="async"></div>
